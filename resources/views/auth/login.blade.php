@@ -62,7 +62,7 @@
     <form class="card" method="post" action="{{ route('login.post') }}">
         @csrf
         <h1 class="title">Acesso ao Recad</h1>
-        <p class="muted">Use seu usuário do AD ou local.</p>
+        <p class="muted">Use seu usuário do AD.</p>
 
         @if($errors->any())
             <div class="errors">

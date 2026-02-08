@@ -7,10 +7,13 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
+use App\Support\Recad\Format;
 
 class AuthController extends Controller
 {
     private ?string $ldapPager = null;
+    private ?string $ldapError = null;
+    private ?string $ldapPagerNormalized = null;
 
     public function showLogin()
     {
@@ -28,24 +31,16 @@ class AuthController extends Controller
         $password = (string) $request->input('password');
 
         if ($this->attemptLdap($username, $password)) {
-            if ($this->ldapPager) {
-                $request->session()->put('ldap_pager', $this->ldapPager);
+            if ($this->ldapPagerNormalized) {
+                $request->session()->put('ldap_pager', $this->ldapPagerNormalized);
             } else {
                 $request->session()->forget('ldap_pager');
             }
             return redirect()->intended(route('dashboard'));
         }
 
-        if (Auth::attempt(['username' => $username, 'password' => $password])) {
-            $request->session()->regenerate();
-            $request->session()->forget('ldap_pager');
-            return redirect()->intended(route('dashboard'));
-        }
-
-        if (Auth::attempt(['email' => $username, 'password' => $password])) {
-            $request->session()->regenerate();
-            $request->session()->forget('ldap_pager');
-            return redirect()->intended(route('dashboard'));
+        if ($this->ldapError) {
+            return back()->withErrors(['username' => $this->ldapError])->onlyInput('username');
         }
 
         return back()->withErrors(['username' => 'Credenciais inválidas.'])->onlyInput('username');
@@ -63,6 +58,8 @@ class AuthController extends Controller
 
     private function attemptLdap(string $username, string $password): bool
     {
+        $this->ldapError = null;
+        $this->ldapPagerNormalized = null;
         $host = config('recad.ldap.host');
         $baseDn = config('recad.ldap.base_dn');
         $bindUser = config('recad.ldap.username');
@@ -70,11 +67,13 @@ class AuthController extends Controller
         $port = config('recad.ldap.port') ?: 389;
 
         if (!$host || !$baseDn || !$bindUser || !$bindPass) {
+            $this->ldapError = 'Configuração LDAP incompleta. Procure a DTI/CORI.';
             return false;
         }
 
         $conn = @ldap_connect($host, $port);
         if (!$conn) {
+            $this->ldapError = 'Não foi possível conectar ao LDAP. Procure a DTI/CORI.';
             return false;
         }
 
@@ -82,6 +81,7 @@ class AuthController extends Controller
         ldap_set_option($conn, LDAP_OPT_REFERRALS, 0);
 
         if (!@ldap_bind($conn, $bindUser, $bindPass)) {
+            $this->ldapError = 'Falha no usuário de serviço do LDAP. Procure a DTI/CORI.';
             return false;
         }
 
@@ -90,24 +90,32 @@ class AuthController extends Controller
             'dn', 'cn', 'displayName', 'mail', 'memberOf', 'sAMAccountName', 'pager',
         ]);
         if (!$search) {
+            $this->ldapError = 'Não foi possível localizar o usuário no LDAP. Procure a DTI/CORI.';
             return false;
         }
 
         $entries = ldap_get_entries($conn, $search);
         if (!isset($entries['count']) || $entries['count'] < 1) {
+            $this->ldapError = 'Usuário não encontrado no LDAP. Procure a DTI/CORI.';
             return false;
         }
 
         $entry = $entries[0];
         $userDn = $entry['dn'] ?? null;
         if (!$userDn) {
+            $this->ldapError = 'DN do usuário não encontrado. Procure a DTI/CORI.';
             return false;
         }
 
         if (!@ldap_bind($conn, $userDn, $password)) {
             return false;
         }
-        $this->ldapPager = $entry['pager'][0] ?? null;
+        $this->ldapPager = isset($entry['pager'][0]) ? trim((string) $entry['pager'][0]) : null;
+        $this->ldapPagerNormalized = Format::normalizeMatricula($this->ldapPager);
+        if (!$this->ldapPagerNormalized) {
+            $this->ldapError = 'Matrícula não encontrada no AD. Procure a DTI/CORI.';
+            return false;
+        }
 
         $displayName = $entry['displayname'][0] ?? $entry['cn'][0] ?? $username;
         $email = $entry['mail'][0] ?? null;

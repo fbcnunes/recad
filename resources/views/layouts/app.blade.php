@@ -132,9 +132,8 @@
     <aside class="sidebar">
         <div class="brand">Recad</div>
         <nav class="nav">
-            <a href="{{ route('dashboard') }}">Dashboard</a>
-            <a href="{{ route('servidores.index') }}">Servidores</a>
-            <a href="{{ route('servidores.create') }}">Novo cadastro</a>
+            <a href="{{ route('dashboard') }}">Meu cadastro</a>
+            <a href="{{ route('servidores.self', ['edit' => 1]) }}">Editar cadastro</a>
         </nav>
         <div style="margin-top:24px; font-size:13px; color:#94a3b8;">
             <div>Usuário: {{ auth()->user()->name ?? '—' }} @if(session('ldap_pager'))<span style="color:#cbd5f5;">({{ session('ldap_pager') }})</span>@endif</div>
@@ -147,12 +146,12 @@
     </aside>
     <main class="content">
         @if(session('status'))
-            <div class="card" style="border-color:#86efac; background:#f0fdf4; margin-bottom:16px;">
+            <div class="card flash-message" style="border-color:#86efac; background:#f0fdf4; margin-bottom:16px;">
                 {{ session('status') }}
             </div>
         @endif
         @if($errors->any())
-            <div class="card" style="border-color:#fca5a5; background:#fef2f2; margin-bottom:16px;">
+            <div class="card flash-message" style="border-color:#fca5a5; background:#fef2f2; margin-bottom:16px;">
                 <strong>Erros no formulário:</strong>
                 <ul style="margin:8px 0 0 18px;">
                     @foreach($errors->all() as $error)
@@ -164,5 +163,19 @@
         @yield('content')
     </main>
 </div>
+<script>
+    (function () {
+        const flashes = document.querySelectorAll('.flash-message');
+        if (!flashes.length) return;
+        window.setTimeout(() => {
+            flashes.forEach(el => {
+                el.style.transition = 'opacity 250ms ease, transform 250ms ease';
+                el.style.opacity = '0';
+                el.style.transform = 'translateY(-6px)';
+                window.setTimeout(() => el.remove(), 260);
+            });
+        }, 5000);
+    })();
+</script>
 </body>
 </html>
