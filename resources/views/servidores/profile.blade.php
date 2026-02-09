@@ -12,6 +12,10 @@
         $contatos = $servidor?->contatosEmergencia ?? collect();
         $dependentes = $servidor?->dependentes ?? collect();
         $disabled = $edit ? '' : 'disabled';
+        $tabs = $tabs ?? \App\Services\ServidorConfirmacaoService::labels();
+        $confirmacoes = $confirmacoes ?? [];
+        $allConfirmed = $allConfirmed ?? false;
+        $confirmedCount = is_array($confirmacoes) ? count($confirmacoes) : 0;
     @endphp
 
     @if($notFound)
@@ -19,39 +23,67 @@
             {{ $notFound }}
         </div>
     @else
-        <form method="post" action="{{ route('servidores.self.update') }}" id="perfil-form">
-            @csrf
-            @method('PUT')
-            <input type="hidden" name="_active_tab" id="active-tab" value="{{ old('_active_tab', 'pessoais') }}">
+        <input type="hidden" id="active-tab" value="{{ old('_active_tab', 'pessoais') }}">
 
-            <div class="card" style="margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-                <div>
-                    <h2 class="section-title" style="margin:0;">Meu cadastro</h2>
-                    <div class="muted">Matrícula: {{ $matricula }}</div>
-                    @if($createMode)
-                        <div class="muted">Cadastro não encontrado. Preencha os dados e salve.</div>
-                    @endif
-                </div>
-                <div style="display:flex; gap:12px; flex-wrap:wrap;">
-                    @if(!$edit)
-                        <a class="btn" href="{{ route('servidores.self', ['edit' => 1]) }}">Editar</a>
-                    @else
-                        <button class="btn" type="submit">{{ $createMode ? 'Salvar cadastro' : 'Salvar alterações' }}</button>
-                        <a class="btn secondary" href="{{ route('servidores.self') }}">Cancelar</a>
-                    @endif
-                </div>
+        @if($edit)
+            <form method="post" action="{{ route('servidores.self.update') }}" id="perfil-form">
+                @csrf
+                @method('PUT')
+                <input type="hidden" name="_active_tab" class="active-tab-field" value="{{ old('_active_tab', 'pessoais') }}">
+        @endif
+
+        <div class="card" style="margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+            <div>
+                <h2 class="section-title" style="margin:0;">Meu cadastro</h2>
+                <div class="muted">Matrícula: {{ $matricula }}</div>
+                @if($createMode)
+                    <div class="muted">Cadastro não encontrado. Preencha os dados e salve.</div>
+                @else
+                    <div class="muted">
+                        Status:
+                        @if($servidor->recadastramento_concluido_em)
+                            Concluído em {{ $servidor->recadastramento_concluido_em->format('d/m/Y H:i') }}.
+                        @else
+                            Pendente ({{ $confirmedCount }}/{{ count(\App\Services\ServidorConfirmacaoService::TABS) }} abas confirmadas).
+                        @endif
+                    </div>
+                @endif
             </div>
+            <div style="display:flex; gap:12px; flex-wrap:wrap;">
+                @if(!$createMode)
+                    <a class="btn secondary" href="{{ route('servidores.self.pdf') }}">Imprimir PDF</a>
+                @endif
+
+                @if(!$edit)
+                    <a class="btn" href="{{ route('servidores.self', ['edit' => 1]) }}">Editar</a>
+                @else
+                    <button class="btn" type="submit">{{ $createMode ? 'Salvar cadastro' : 'Salvar alterações' }}</button>
+                    <a class="btn secondary" href="{{ route('servidores.self') }}">Cancelar</a>
+                @endif
+
+                @if(!$edit && !$createMode && !$servidor->recadastramento_concluido_em)
+                    <form method="post" action="{{ route('servidores.self.concluir') }}">
+                        @csrf
+                        <input type="hidden" name="_active_tab" class="active-tab-field" value="pessoais">
+                        <button class="btn" type="submit">Concluir</button>
+                    </form>
+                @endif
+            </div>
+        </div>
 
             <div class="card" style="margin-bottom:16px;">
                 <div class="tabs" style="display:flex; gap:8px; flex-wrap:wrap;">
-                    <button type="button" class="btn secondary tab-btn" data-tab="pessoais">Dados pessoais</button>
-                    <button type="button" class="btn secondary tab-btn" data-tab="endereco">Endereço</button>
-                    <button type="button" class="btn secondary tab-btn" data-tab="documentos">Documentação</button>
-                    <button type="button" class="btn secondary tab-btn" data-tab="certidao">Certidão</button>
-                    <button type="button" class="btn secondary tab-btn" data-tab="ingresso">Ingresso</button>
-                    <button type="button" class="btn secondary tab-btn" data-tab="banco">Banco</button>
-                    <button type="button" class="btn secondary tab-btn" data-tab="emergencia">Emergência</button>
-                    <button type="button" class="btn secondary tab-btn" data-tab="dependentes">Dependentes</button>
+                    @foreach(\App\Services\ServidorConfirmacaoService::TABS as $aba)
+                        @php($ok = isset($confirmacoes[$aba]))
+                        <button type="button" class="btn secondary tab-btn" data-tab="{{ $aba }}">
+                            {{ $tabs[$aba] ?? $aba }}
+                            @if(!$createMode)
+                                <span class="badge" style="margin-left:8px; background:{{ $ok ? '#dcfce7' : '#fee2e2' }}; color:{{ $ok ? '#166534' : '#991b1b' }};">
+                                    {{ $ok ? 'OK' : 'Pendente' }}
+                                </span>
+                            @endif
+                        </button>
+                    @endforeach
                 </div>
             </div>
 
@@ -182,6 +214,9 @@
                         </div>
                     </div>
                 </div>
+                @if(!$edit && !$createMode)
+                    @include('servidores.partials.confirmacao', ['aba' => 'pessoais', 'confirmacoes' => $confirmacoes])
+                @endif
             </div>
 
             <div class="card tab-panel" data-tab-panel="endereco" style="display:none;">
@@ -232,6 +267,9 @@
                         <input name="plano_saude" value="{{ old('plano_saude', $servidor->plano_saude) }}" {{ $disabled }}>
                     </div>
                 </div>
+                @if(!$edit && !$createMode)
+                    @include('servidores.partials.confirmacao', ['aba' => 'endereco', 'confirmacoes' => $confirmacoes])
+                @endif
             </div>
 
             <div class="card tab-panel" data-tab-panel="documentos" style="display:none;">
@@ -322,6 +360,9 @@
                         <input name="pis_pasep" value="{{ old('pis_pasep', $doc->pis_pasep ?? '') }}" {{ $disabled }}>
                     </div>
                 </div>
+                @if(!$edit && !$createMode)
+                    @include('servidores.partials.confirmacao', ['aba' => 'documentos', 'confirmacoes' => $confirmacoes])
+                @endif
             </div>
 
             <div class="card tab-panel" data-tab-panel="certidao" style="display:none;">
@@ -356,6 +397,9 @@
                         <input name="certidao_matricula" value="{{ old('certidao_matricula', $cert->matricula ?? '') }}" {{ $disabled }}>
                     </div>
                 </div>
+                @if(!$edit && !$createMode)
+                    @include('servidores.partials.confirmacao', ['aba' => 'certidao', 'confirmacoes' => $confirmacoes])
+                @endif
             </div>
 
             <div class="card tab-panel" data-tab-panel="ingresso" style="display:none;">
@@ -402,6 +446,9 @@
                         <input name="orgao_origem" value="{{ old('orgao_origem', $vinculo->orgao_origem ?? '') }}" {{ $disabled }}>
                     </div>
                 </div>
+                @if(!$edit && !$createMode)
+                    @include('servidores.partials.confirmacao', ['aba' => 'ingresso', 'confirmacoes' => $confirmacoes])
+                @endif
             </div>
 
             <div class="card tab-panel" data-tab-panel="banco" style="display:none;">
@@ -420,6 +467,9 @@
                         <input name="conta_corrente_num" value="{{ old('conta_corrente_num', $conta->conta_corrente_num ?? '') }}" {{ $disabled }}>
                     </div>
                 </div>
+                @if(!$edit && !$createMode)
+                    @include('servidores.partials.confirmacao', ['aba' => 'banco', 'confirmacoes' => $confirmacoes])
+                @endif
             </div>
 
             <div class="card tab-panel" data-tab-panel="emergencia" style="display:none;">
@@ -455,6 +505,9 @@
                         </div>
                     @endforeach
                 </div>
+                @if(!$edit && !$createMode)
+                    @include('servidores.partials.confirmacao', ['aba' => 'emergencia', 'confirmacoes' => $confirmacoes])
+                @endif
             </div>
 
             <div class="card tab-panel" data-tab-panel="dependentes" style="display:none;">
@@ -535,8 +588,13 @@
                         </div>
                     @endforeach
                 </div>
+                @if(!$edit && !$createMode)
+                    @include('servidores.partials.confirmacao', ['aba' => 'dependentes', 'confirmacoes' => $confirmacoes])
+                @endif
             </div>
-        </form>
+        @if($edit)
+            </form>
+        @endif
 
         @if($edit)
             <template id="contato-template">
@@ -648,6 +706,9 @@
                     }
                     const activeTab = document.getElementById('active-tab');
                     if (activeTab) activeTab.value = tab || 'pessoais';
+                    document.querySelectorAll('.active-tab-field').forEach(el => {
+                        el.value = tab || 'pessoais';
+                    });
                 }
 
                 buttons.forEach(btn => {

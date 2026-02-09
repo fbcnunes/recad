@@ -8,8 +8,11 @@ use App\Models\ContatoEmergencia;
 use App\Models\Dependente;
 use App\Models\DocumentoPessoal;
 use App\Models\Servidor;
+use App\Services\ServidorConfirmacaoService;
 use App\Models\Vinculo;
+use Dompdf\Dompdf;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
@@ -19,6 +22,7 @@ class ServidorController extends Controller
     {
         $matricula = $request->session()->get('ldap_pager');
         $edit = $request->boolean('edit');
+        $svc = new ServidorConfirmacaoService();
 
         if (!$matricula) {
             return view('servidores.profile', [
@@ -27,6 +31,9 @@ class ServidorController extends Controller
                 'matricula' => null,
                 'notFound' => 'Matrícula não encontrada no AD. Procure a DTI/CORI.',
                 'createMode' => false,
+                'tabs' => ServidorConfirmacaoService::labels(),
+                'confirmacoes' => [],
+                'allConfirmed' => false,
             ]);
         }
 
@@ -38,6 +45,7 @@ class ServidorController extends Controller
                 'contaBancaria',
                 'contatosEmergencia',
                 'dependentes',
+                'confirmacoes',
             ])
             ->where('matricula', $matricula)
             ->first();
@@ -49,8 +57,17 @@ class ServidorController extends Controller
                 'matricula' => $matricula,
                 'notFound' => null,
                 'createMode' => true,
+                'tabs' => ServidorConfirmacaoService::labels(),
+                'confirmacoes' => [],
+                'allConfirmed' => false,
             ]);
         }
+
+        // Auto-invalidate confirmations if the underlying data changed.
+        $svc->syncStaleConfirmacoes($servidor);
+        $servidor->loadMissing('confirmacoes');
+        $confirmacoes = $servidor->confirmacoes->keyBy('aba')->all();
+        $allConfirmed = $svc->allTabsConfirmed($servidor);
 
         return view('servidores.profile', [
             'servidor' => $servidor,
@@ -58,6 +75,9 @@ class ServidorController extends Controller
             'matricula' => $matricula,
             'notFound' => null,
             'createMode' => false,
+            'tabs' => ServidorConfirmacaoService::labels(),
+            'confirmacoes' => $confirmacoes,
+            'allConfirmed' => $allConfirmed,
         ]);
     }
 
@@ -69,18 +89,10 @@ class ServidorController extends Controller
                 ->withErrors(['matricula' => 'Matrícula não encontrada. Procure a DTI/CORI.']);
         }
 
+        $this->uppercaseTextInputs($request);
+
         $tab = (string) $request->input('_active_tab', 'pessoais');
-        $allowedTabs = [
-            'pessoais',
-            'endereco',
-            'documentos',
-            'certidao',
-            'ingresso',
-            'banco',
-            'emergencia',
-            'dependentes',
-        ];
-        if (!in_array($tab, $allowedTabs, true)) {
+        if (!ServidorConfirmacaoService::isValidTab($tab)) {
             $tab = 'pessoais';
         }
 
@@ -93,6 +105,25 @@ class ServidorController extends Controller
 
         $documento = $servidor->documentoPessoal ?? null;
         $data = $this->validateData($request, $servidor, $documento);
+
+        $svc = new ServidorConfirmacaoService();
+        // Capture current hashes for already-confirmed tabs to detect meaningful changes.
+        $servidor->loadMissing([
+            'documentoPessoal',
+            'certidaoServidor',
+            'vinculo',
+            'contaBancaria',
+            'contatosEmergencia',
+            'dependentes',
+            'confirmacoes',
+        ]);
+        $preHashes = [];
+        foreach ($servidor->confirmacoes as $conf) {
+            $aba = (string) $conf->aba;
+            if (ServidorConfirmacaoService::isValidTab($aba)) {
+                $preHashes[$aba] = (string) $conf->hash_snapshot;
+            }
+        }
 
         $servidorData = $this->only($data, [
             'nome', 'pai', 'mae', 'data_nascimento', 'estado_civil', 'conjuge_nome',
@@ -190,9 +221,190 @@ class ServidorController extends Controller
             }
         });
 
+        // Reload saved state and auto-invalidate stale confirmations.
+        $servidor = Servidor::query()
+            ->with([
+                'documentoPessoal',
+                'certidaoServidor',
+                'vinculo',
+                'contaBancaria',
+                'contatosEmergencia',
+                'dependentes',
+                'confirmacoes',
+            ])
+            ->findOrFail($servidor->id);
+
+        $invalidated = [];
+        foreach ($preHashes as $aba => $oldHash) {
+            $currentHash = $svc->hashFor($servidor, $aba);
+            if (!hash_equals($oldHash, (string) $currentHash)) {
+                $invalidated[] = $aba;
+            }
+        }
+        if (!empty($invalidated)) {
+            DB::transaction(function () use ($servidor, $invalidated) {
+                $servidor->confirmacoes()->whereIn('aba', $invalidated)->delete();
+                if ($servidor->recadastramento_concluido_em) {
+                    $servidor->recadastramento_concluido_em = null;
+                    $servidor->recadastramento_concluido_por_user_id = null;
+                    $servidor->save();
+                }
+            });
+        }
+
         return redirect()
             ->to(route('servidores.self') . '#' . $tab)
             ->with('status', 'Dados atualizados com sucesso.');
+    }
+
+    public function confirmTab(Request $request, string $aba)
+    {
+        $matricula = $request->session()->get('ldap_pager');
+        if (!$matricula) {
+            return redirect()->route('servidores.self')
+                ->withErrors(['matricula' => 'Matrícula não encontrada no AD. Procure a DTI/CORI.']);
+        }
+        if (!ServidorConfirmacaoService::isValidTab($aba)) {
+            return redirect()->route('servidores.self')->withErrors(['aba' => 'Aba inválida.']);
+        }
+
+        $tab = (string) $request->input('_active_tab', $aba);
+        if (!ServidorConfirmacaoService::isValidTab($tab)) $tab = $aba;
+
+        $servidor = Servidor::query()
+            ->with(['documentoPessoal','certidaoServidor','vinculo','contaBancaria','contatosEmergencia','dependentes'])
+            ->where('matricula', $matricula)
+            ->first();
+
+        if (!$servidor) {
+            return redirect()
+                ->to(route('servidores.self') . '#' . $tab)
+                ->withErrors(['servidor' => 'Salve seu cadastro antes de confirmar as abas.']);
+        }
+
+        $svc = new ServidorConfirmacaoService();
+        $svc->confirmTab($servidor, $aba, Auth::id());
+
+        return redirect()
+            ->to(route('servidores.self') . '#' . $tab)
+            ->with('status', 'Aba confirmada.');
+    }
+
+    public function unconfirmTab(Request $request, string $aba)
+    {
+        $matricula = $request->session()->get('ldap_pager');
+        if (!$matricula) {
+            return redirect()->route('servidores.self')
+                ->withErrors(['matricula' => 'Matrícula não encontrada no AD. Procure a DTI/CORI.']);
+        }
+        if (!ServidorConfirmacaoService::isValidTab($aba)) {
+            return redirect()->route('servidores.self')->withErrors(['aba' => 'Aba inválida.']);
+        }
+
+        $tab = (string) $request->input('_active_tab', $aba);
+        if (!ServidorConfirmacaoService::isValidTab($tab)) $tab = $aba;
+
+        $servidor = Servidor::where('matricula', $matricula)->first();
+        if (!$servidor) {
+            return redirect()->to(route('servidores.self') . '#' . $tab);
+        }
+
+        $svc = new ServidorConfirmacaoService();
+        $svc->unconfirmTab($servidor, $aba);
+
+        return redirect()
+            ->to(route('servidores.self') . '#' . $tab)
+            ->with('status', 'Confirmação removida.');
+    }
+
+    public function concluirRecadastramento(Request $request)
+    {
+        $matricula = $request->session()->get('ldap_pager');
+        if (!$matricula) {
+            return redirect()->route('servidores.self')
+                ->withErrors(['matricula' => 'Matrícula não encontrada no AD. Procure a DTI/CORI.']);
+        }
+
+        $tab = (string) $request->input('_active_tab', 'pessoais');
+        if (!ServidorConfirmacaoService::isValidTab($tab)) $tab = 'pessoais';
+
+        $servidor = Servidor::query()
+            ->with([
+                'documentoPessoal',
+                'certidaoServidor',
+                'vinculo',
+                'contaBancaria',
+                'contatosEmergencia',
+                'dependentes',
+                'confirmacoes',
+            ])
+            ->where('matricula', $matricula)
+            ->first();
+
+        if (!$servidor) {
+            return redirect()->to(route('servidores.self') . '#' . $tab)
+                ->withErrors(['servidor' => 'Cadastro não encontrado. Preencha e salve antes de concluir.']);
+        }
+
+        $svc = new ServidorConfirmacaoService();
+        $svc->syncStaleConfirmacoes($servidor);
+
+        if (!$svc->allTabsConfirmed($servidor)) {
+            return redirect()->to(route('servidores.self') . '#' . $tab)
+                ->withErrors(['conclusao' => 'Para concluir, confirme todas as abas.']);
+        }
+
+        $servidor->recadastramento_concluido_em = now();
+        $servidor->recadastramento_concluido_por_user_id = Auth::id();
+        $servidor->save();
+
+        return redirect()
+            ->to(route('servidores.self') . '#' . $tab)
+            ->with('status', 'Recadastramento concluído.');
+    }
+
+    public function pdf(Request $request)
+    {
+        $matricula = $request->session()->get('ldap_pager');
+        if (!$matricula) {
+            return redirect()->route('servidores.self')
+                ->withErrors(['matricula' => 'Matrícula não encontrada no AD. Procure a DTI/CORI.']);
+        }
+
+        $servidor = Servidor::query()
+            ->with([
+                'documentoPessoal',
+                'certidaoServidor',
+                'vinculo',
+                'contaBancaria',
+                'contatosEmergencia',
+                'dependentes',
+                'confirmacoes',
+            ])
+            ->where('matricula', $matricula)
+            ->firstOrFail();
+
+        $printAt = now();
+        $html = view('servidores.pdf', [
+            'servidor' => $servidor,
+            'printAt' => $printAt,
+            'tabs' => ServidorConfirmacaoService::labels(),
+        ])->render();
+
+        $dompdf = new Dompdf([
+            'isRemoteEnabled' => false,
+            'isHtml5ParserEnabled' => true,
+        ]);
+        $dompdf->loadHtml($html, 'UTF-8');
+        $dompdf->setPaper('A4', 'portrait');
+        $dompdf->render();
+
+        $filename = 'recad_' . $servidor->matricula . '.pdf';
+
+        return response($dompdf->output(), 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'inline; filename="' . $filename . '"',
+        ]);
     }
 
     private function only(array $data, array $keys): array
@@ -308,5 +520,71 @@ class ServidorController extends Controller
             'dependentes.*.sexo' => ['nullable', 'string', 'max:50', Rule::in(config('recad.sexo'))],
             'dependentes.*.tipo_dependente' => ['nullable', 'string', 'max:50', Rule::in(config('recad.dependente_tipo'))],
         ]);
+    }
+
+    private function uppercaseTextInputs(Request $request): void
+    {
+        $upper = function ($v) {
+            if ($v === null) return null;
+            if (!is_string($v)) return $v;
+            $v = trim($v);
+            if ($v === '') return '';
+            if (function_exists('mb_strtoupper')) {
+                return mb_strtoupper($v, 'UTF-8');
+            }
+            return strtoupper($v);
+        };
+
+        // Scalar fields: free-text only.
+        // Do NOT uppercase enum-like fields that are validated with Rule::in(config('recad.*')),
+        // otherwise the submitted value will not match the canonical option labels.
+        $keys = [
+            'nome','pai','mae','conjuge_nome','naturalidade','naturalidade_uf','nacionalidade',
+            'curso','pos_graduacao','pos_curso',
+            'endereco','numero','bairro','complemento','cep','cidade','cidade_uf','fone_fixo','celular','plano_saude',
+            'rg_num','rg_uf','cpf','id_prof_num','id_prof_tipo','id_prof_uf','cnh_num','cnh_categoria','cnh_uf',
+            'ctps_num','ctps_serie','titulo_eleitor_num','titulo_zona','titulo_secao','reservista_num','reservista_categoria',
+            'reservista_uf','pis_pasep',
+            'certidao_registro_num','certidao_livro','certidao_folha','certidao_matricula',
+            'portaria_num','doe_num','cargo_funcao','orgao_origem',
+            'banco_num','agencia_num','conta_corrente_num',
+        ];
+
+        $merge = [];
+        foreach ($keys as $k) {
+            if ($request->has($k)) {
+                // Keep emails as-is (we do not uppercase).
+                if ($k === 'email') continue;
+                $merge[$k] = $upper($request->input($k));
+            }
+        }
+
+        // Nested arrays.
+        $contatos = $request->input('contatos_emergencia', []);
+        if (is_array($contatos)) {
+            foreach ($contatos as $i => $c) {
+                if (!is_array($c)) continue;
+                foreach (['nome','parentesco'] as $f) {
+                    if (array_key_exists($f, $c)) $contatos[$i][$f] = $upper($c[$f]);
+                }
+            }
+            $merge['contatos_emergencia'] = $contatos;
+        }
+
+        $dependentes = $request->input('dependentes', []);
+        if (is_array($dependentes)) {
+            foreach ($dependentes as $i => $d) {
+                if (!is_array($d)) continue;
+                // Keep radio/select fields as-is: certidao_tipo, sexo, tipo_dependente.
+                foreach (['nome','parentesco','rg_num','cpf'] as $f) {
+                    if (array_key_exists($f, $d)) $dependentes[$i][$f] = $upper($d[$f]);
+                }
+            }
+            $merge['dependentes'] = $dependentes;
+        }
+
+        if (!empty($merge)) {
+            $request->merge($merge);
+        }
     }
 }

@@ -133,7 +133,6 @@
         <div class="brand">Recad</div>
         <nav class="nav">
             <a href="{{ route('dashboard') }}">Meu cadastro</a>
-            <a href="{{ route('servidores.self', ['edit' => 1]) }}">Editar cadastro</a>
         </nav>
         <div style="margin-top:24px; font-size:13px; color:#94a3b8;">
             <div>Usuário: {{ auth()->user()->name ?? '—' }} @if(session('ldap_pager'))<span style="color:#cbd5f5;">({{ session('ldap_pager') }})</span>@endif</div>
@@ -175,6 +174,37 @@
                 window.setTimeout(() => el.remove(), 260);
             });
         }, 5000);
+    })();
+</script>
+<script>
+    (function () {
+        // Uppercase text inputs on blur for data consistency (display and stored value).
+        // Excludes email/password/date/number/tel and read-only/disabled fields.
+        const shouldUppercase = (el) => {
+            if (!el) return false;
+            if (el.disabled) return false;
+            if (el.readOnly) return false;
+            if (el.tagName === 'TEXTAREA') return true;
+            if (el.tagName !== 'INPUT') return false;
+            const t = (el.getAttribute('type') || 'text').toLowerCase();
+            if (t === 'email' || t === 'password' || t === 'date' || t === 'number' || t === 'tel') return false;
+            return t === 'text' || t === 'search' || t === '';
+        };
+
+        document.addEventListener('focusin', (e) => {
+            const el = e.target;
+            if (!shouldUppercase(el)) return;
+            el.style.textTransform = 'uppercase';
+        });
+
+        document.addEventListener('blur', (e) => {
+            const el = e.target;
+            if (!shouldUppercase(el)) return;
+            const v = el.value;
+            if (!v) return;
+            const up = v.toLocaleUpperCase('pt-BR');
+            if (up !== v) el.value = up;
+        }, true);
     })();
 </script>
 </body>

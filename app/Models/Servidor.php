@@ -16,6 +16,7 @@ class Servidor extends Model
         'data_nascimento' => 'date',
         'pos_inicio' => 'date',
         'pos_fim' => 'date',
+        'recadastramento_concluido_em' => 'datetime',
     ];
 
     public function documentoPessoal(): HasOne
@@ -46,5 +47,10 @@ class Servidor extends Model
     public function dependentes(): HasMany
     {
         return $this->hasMany(Dependente::class);
+    }
+
+    public function confirmacoes(): HasMany
+    {
+        return $this->hasMany(ServidorConfirmacao::class);
     }
 }
