@@ -57,3 +57,23 @@ If you discover a security vulnerability within Laravel, please send an e-mail t
 ## License
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+
+## Recad: Dump PostgreSQL
+
+O projeto possui um script para gerar dump compatível com PostgreSQL a partir do banco MySQL configurado no `.env`.
+
+Pré-requisitos:
+- `DB_CONNECTION=mysql` no `.env`.
+- Migrations aplicadas no banco de origem (`php artisan migrate`).
+
+Comando:
+
+```bash
+php scripts/mysql_to_postgres_dump.php
+```
+
+Saída gerada:
+- `dumps/recad_postgresql_dump.sql`
+
+Observação:
+- O script valida tabelas obrigatórias da aplicação (incluindo `admin_users`) e falha se houver migrations pendentes.

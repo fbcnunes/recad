@@ -266,6 +266,22 @@ $tablesStmt = $pdo->prepare(
 $tablesStmt->execute(['db' => $dbName]);
 $tables = $tablesStmt->fetchAll(PDO::FETCH_COLUMN);
 
+// Fail fast when expected app tables are missing, which usually indicates
+// pending migrations and would produce an outdated dump.
+$requiredTables = [
+    'users',
+    'servidores',
+    'servidor_confirmacoes',
+    'admin_users',
+];
+$missingRequiredTables = array_values(array_diff($requiredTables, $tables));
+if ($missingRequiredTables !== []) {
+    throw new RuntimeException(
+        'Missing required tables in source database: ' . implode(', ', $missingRequiredTables) .
+        '. Run migrations before generating the PostgreSQL dump.'
+    );
+}
+
 $schemaInfo = [];
 $identityColumns = [];
 
