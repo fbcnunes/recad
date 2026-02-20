@@ -129,9 +129,8 @@ class AuthController extends Controller
             }
         }
 
-        $role = $this->resolveRole($memberOf);
-
         $user = User::where('username', $username)->first();
+        $role = $this->resolveRole($memberOf, $username, $user);
         if (!$user) {
             $user = User::create([
                 'username' => $username,
@@ -153,8 +152,20 @@ class AuthController extends Controller
         return true;
     }
 
-    private function resolveRole(array $memberOf): string
+    private function resolveRole(array $memberOf, string $username, ?User $existingUser): string
     {
+        $normalizedUsername = trim($username);
+        $normalizedUsername = function_exists('mb_strtolower')
+            ? mb_strtolower($normalizedUsername, 'UTF-8')
+            : strtolower($normalizedUsername);
+        if (in_array($normalizedUsername, User::configuredInitialAdminUsernames(), true)) {
+            return 'admin';
+        }
+
+        if ($existingUser && $existingUser->adminGrant()->exists()) {
+            return 'admin';
+        }
+
         $map = config('recad.ldap_groups', []);
 
         foreach ($map as $role => $groups) {

@@ -22,4 +22,8 @@ return [
             env('LDAP_GROUP_LEITURA', 'CN=Users,DC=sead,DC=gov'),
         ],
     ],
+    'initial_admin_usernames' => array_values(array_filter(array_map(
+        static fn (string $v): string => trim($v),
+        explode(',', (string) env('INITIAL_ADMIN_USERNAMES', 'fernando.nunes'))
+    ))),
 ];

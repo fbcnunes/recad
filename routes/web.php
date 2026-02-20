@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\AdminController;
 use App\Http\Controllers\ServidorController;
 use App\Http\Controllers\AuthController;
 
@@ -17,4 +18,13 @@ Route::middleware('auth')->group(function () {
     Route::post('/meu-cadastro/desconfirmar/{aba}', [ServidorController::class, 'unconfirmTab'])->name('servidores.self.unconfirm');
     Route::post('/meu-cadastro/concluir', [ServidorController::class, 'concluirRecadastramento'])->name('servidores.self.concluir');
     Route::get('/meu-cadastro/pdf', [ServidorController::class, 'pdf'])->name('servidores.self.pdf');
+
+    Route::prefix('admin')->name('admin.')->middleware('admin')->group(function () {
+        Route::get('/', [AdminController::class, 'dashboard'])->name('dashboard');
+        Route::get('/concluidos', [AdminController::class, 'concluidos'])->name('concluidos');
+        Route::get('/concluidos/exportar-csv', [AdminController::class, 'exportConcluidosCsv'])->name('concluidos.export.csv');
+        Route::get('/administradores', [AdminController::class, 'admins'])->name('admins');
+        Route::post('/administradores/{user}/conceder', [AdminController::class, 'grantAdmin'])->name('admins.grant');
+        Route::post('/administradores/{user}/revogar', [AdminController::class, 'revokeAdmin'])->name('admins.revoke');
+    });
 });

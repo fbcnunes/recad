@@ -129,14 +129,24 @@
 </head>
 <body>
 <div class="app">
+    @php
+        $currentUser = auth()->user();
+        $currentUserIsAdmin = $currentUser?->isAdmin() ?? false;
+    @endphp
     <aside class="sidebar">
         <div class="brand">Recad</div>
         <nav class="nav">
             <a href="{{ route('dashboard') }}">Meu cadastro</a>
+            @if($currentUserIsAdmin)
+                <a href="{{ route('admin.dashboard') }}">Admin: Dashboard</a>
+                <a href="{{ route('admin.concluidos') }}">Admin: Concluídos</a>
+                <a href="{{ route('admin.admins') }}">Admin: Administradores</a>
+            @endif
         </nav>
         <div style="margin-top:24px; font-size:13px; color:#94a3b8;">
-            <div>Usuário: {{ auth()->user()->name ?? '—' }} @if(session('ldap_pager'))<span style="color:#cbd5f5;">({{ session('ldap_pager') }})</span>@endif</div>
-            <div>Perfil: {{ auth()->user()->role ?? '—' }}</div>
+            <div>Usuário: {{ $currentUser->name ?? '—' }} @if(session('ldap_pager'))<span style="color:#cbd5f5;">({{ session('ldap_pager') }})</span>@endif</div>
+            <div>Perfil LDAP: {{ $currentUser->role ?? '—' }}</div>
+            <div>Acesso admin: {{ $currentUserIsAdmin ? 'sim' : 'não' }}</div>
             <form method="post" action="{{ route('logout') }}" style="margin-top:12px;">
                 @csrf
                 <button class="btn secondary" type="submit" style="width:100%;">Sair</button>

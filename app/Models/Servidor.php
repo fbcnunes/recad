@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
@@ -52,5 +53,10 @@ class Servidor extends Model
     public function confirmacoes(): HasMany
     {
         return $this->hasMany(ServidorConfirmacao::class);
+    }
+
+    public function concluidoPor(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'recadastramento_concluido_por_user_id');
     }
 }
